@@ -291,17 +291,25 @@ extract_track_data(DVDA_Track_Reader* track_reader,
     BitstreamWriter *output;
     const unsigned channel_count = dvda_channel_count(track_reader);
     const unsigned bits_per_sample = dvda_bits_per_sample(track_reader);
+    const unsigned bytes_per_sample = bits_per_sample / 8;
     int buffer[BUFFER_SIZE * channel_count];
+    unsigned char byte_buffer[BUFFER_SIZE * channel_count * bytes_per_sample];
     unsigned frames_read;
     bw_pos_t *file_start;
     unsigned total_pcm_frames = 0;
-    bw_write_signed_f write_signed;
+
+    if (bits_per_sample != 16 && bits_per_sample != 24) {
+        fprintf(stderr, "*** Error: bits per sample (%u) not 16 or 24\n",
+                bits_per_sample);
+        return;
+    }
 
     if ((output_file = fopen(output_path, "wb")) == NULL) {
         fprintf(stderr, "*** Error: unable to open \"%s\" for writing\n",
                 output_path);
         return;
     }
+    setvbuf(output_file, NULL, _IOFBF, 1 << 24);
 
     printf("* Extracting %s track  %u channels  %u Hz  %u bps\n",
            (dvda_codec(track_reader) == DVDA_MLP ? "MLP" : "PCM"),
@@ -310,7 +318,6 @@ extract_track_data(DVDA_Track_Reader* track_reader,
            dvda_bits_per_sample(track_reader));
 
     output = bw_open(output_file, BS_LITTLE_ENDIAN);
-    write_signed = output->write_signed;
 
     /*write initial RIFF WAVE header*/
     file_start = output->getpos(output);
@@ -327,9 +334,19 @@ extract_track_data(DVDA_Track_Reader* track_reader,
                                     BUFFER_SIZE,
                                     buffer)) > 0) {
         unsigned i;
-        for (i = 0; i < frames_read * channel_count; i++) {
-            write_signed(output, bits_per_sample, buffer[i]);
+        if (bytes_per_sample == 2) {
+            for (i = 0; i < frames_read * channel_count; i++) {
+                byte_buffer[2 * i] = buffer[i] & 0xFF;
+                byte_buffer[2 * i + 1] = (buffer[i] >> 8) & 0xFF;
+            }
+        } else {
+            for (i = 0; i < frames_read * channel_count; i++) {
+                byte_buffer[3 * i] = buffer[i] & 0xFF;
+                byte_buffer[3 * i + 1] = (buffer[i] >> 8) & 0xFF;
+                byte_buffer[3 * i + 2] = (buffer[i] >> 16) & 0xFF;
+            }
         }
+        output->write_bytes(output, byte_buffer, frames_read * channel_count * bytes_per_sample);
         total_pcm_frames += frames_read;
     }
 
